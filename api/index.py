@@ -1,5 +1,9 @@
+import sys
 from pathlib import Path
 from typing import Optional
+
+# Let Python find ai_engine.py and extractor.py in the repo root
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -35,7 +39,7 @@ def home():
 # HEALTH CHECK
 # =========================
 
-@app.get("/health")
+@app.get("/api/health")
 def health():
     return {
         "ok": True,
@@ -48,7 +52,7 @@ def health():
 # GENERATE STUDY PACK
 # =========================
 
-@app.post("/generate")
+@app.post("/api/generate")
 async def generate(
     notes: str = Form(""),
     provider: str = Form("Auto-Detect"),
@@ -59,9 +63,7 @@ async def generate(
     try:
         source_text = (notes or "").strip()
 
-        # -------------------------
         # Uploaded file
-        # -------------------------
         if file is not None and file.filename:
             file_bytes = await file.read()
 
@@ -72,10 +74,7 @@ async def generate(
                 )
 
             try:
-                extracted_text = extract_text(
-                    file.filename,
-                    file_bytes
-                )
+                extracted_text = extract_text(file.filename, file_bytes)
             except Exception as exc:
                 raise HTTPException(
                     status_code=400,
@@ -88,9 +87,7 @@ async def generate(
                 else:
                     source_text = extracted_text
 
-        # -------------------------
         # Validate notes
-        # -------------------------
         if not source_text:
             raise HTTPException(
                 status_code=400,
@@ -100,9 +97,6 @@ async def generate(
         # Prevent very large requests
         source_text = source_text[:60000]
 
-        # -------------------------
-        # Existing AI engine
-        # -------------------------
         package = generate_study_package(
             source_text,
             provider=provider,
@@ -110,12 +104,7 @@ async def generate(
             model=model,
         )
 
-        return JSONResponse(
-            content={
-                "ok": True,
-                "package": package
-            }
-        )
+        return JSONResponse(content={"ok": True, "package": package})
 
     except HTTPException:
         raise
