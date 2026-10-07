@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NotesGenius AI — Study Assistant</title>
+<style>
+:root{--blue:#2563eb;--indigo:#4f46e5;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--bg:#f8fafc;--card:#fff}
+*{box-sizing:border-box}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;color:var(--ink);background:linear-gradient(135deg,#f8fbff,#fff)}
+.app{display:grid;grid-template-columns:320px 1fr;min-height:100vh}.side{background:#f8fafc;border-right:1px solid var(--line);padding:26px;position:sticky;top:0;height:100vh;overflow:auto}.main{padding:42px;max-width:1250px;width:100%;margin:auto}
+.badge{display:inline-block;padding:6px 12px;border-radius:999px;background:#eef2ff;border:1px solid #c7d2fe;color:#4338ca;font-weight:800;font-size:12px;letter-spacing:.08em}
+h1{font-size:clamp(32px,4vw,52px);line-height:1.05;margin:16px 0 10px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#4f46e5);-webkit-background-clip:text;color:transparent}
+.lead{color:#475569;font-size:17px;margin-bottom:28px}.panel,.card{background:var(--card);border:1px solid var(--line);border-radius:18px;box-shadow:0 8px 28px rgba(15,23,42,.05);padding:22px}
+label{display:block;font-size:13px;font-weight:800;margin:16px 0 7px}select,input,textarea{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:11px 12px;background:#fff;color:var(--ink);font:inherit}textarea{min-height:260px;resize:vertical}
+button{border:0;border-radius:10px;padding:11px 14px;font-weight:800;cursor:pointer;background:#e2e8f0;color:#0f172a}button:hover{filter:brightness(.98)}.primary{width:100%;background:linear-gradient(135deg,var(--blue),var(--indigo));color:white;box-shadow:0 7px 20px rgba(37,99,235,.25);margin-top:18px}
+.demo{display:grid;grid-template-columns:1fr 1fr;gap:8px}.demo button{font-size:12px}.hint{font-size:12px;color:var(--muted);line-height:1.5}.status{margin-top:14px;font-size:13px}.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;padding:12px;border-radius:10px}.success{background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;padding:12px;border-radius:10px}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:22px 0}.metric{padding:18px;border:1px solid var(--line);border-radius:14px;background:#fff}.metric b{display:block;font-size:28px}.metric span{color:var(--muted);font-size:12px;font-weight:700}
+.tabs{display:flex;gap:8px;background:#f1f5f9;border:1px solid var(--line);padding:6px;border-radius:12px;margin:22px 0 16px}.tabs button{background:transparent;color:#475569}.tabs button.active{background:#fff;color:#4338ca;border:1px solid #c7d2fe}.tab{display:none}.tab.active{display:block}.summary{line-height:1.75;color:#334155}.summary h3,.summary h4{color:#1e3a8a}.summary code{background:#f1f5f9;padding:2px 5px;border-radius:5px}
+ul{line-height:1.8}.flash{min-height:240px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;border:2px solid #e0e7ff;border-radius:20px;background:#f8faff;padding:28px}.flash .tag{font-size:12px;font-weight:900;letter-spacing:.12em;color:#2563eb;margin-bottom:16px}.flash .text{font-size:22px;font-weight:700;max-width:800px}
+.quizq{padding:18px 0;border-bottom:1px solid #e2e8f0}.quizq label{font-weight:700;margin:8px 0}.quizq input{width:auto;margin-right:8px}.score{font-size:24px;font-weight:900;margin-top:20px}
+.actions{display:flex;gap:10px;flex-wrap:wrap}.actions button{background:#fff;border:1px solid var(--line)}
+@media(max-width:900px){.app{display:block}.side{position:relative;height:auto}.main{padding:24px}.metrics{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:550px){.metrics{grid-template-columns:1fr 1fr}.demo{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="side">
+  <span class="badge">⚡ CORE ENGINE</span>
+  <h2>AI Configuration</h2>
+  <label>LLM Provider</label>
+  <select id="provider">
+    <option>Auto-Detect</option>
+    <option>Groq</option>
+    <option>Demo Mode (Offline / No Key)</option>
+    <option>Google Gemini</option>
+    <option>Anthropic</option>
+    <option>OpenAI</option>
+  </select>
+  <label>API Key <span class="hint">(optional if set in Vercel)</span></label>
+  <input id="key" type="password" placeholder="Paste key or leave blank">
+  <label>Model <span class="hint">(optional)</span></label>
+  <input id="model" placeholder="Use provider default">
+  <hr style="border:0;border-top:1px solid #e2e8f0;margin:22px 0">
+  <h3>📥 Source Ingestion</h3>
+  <p class="hint">Use a sample for a fast hackathon demo.</p>
+  <div class="demo">
+    <button onclick="sample('os')">💻 OS & Systems</button>
+    <button onclick="sample('bio')">🧬 Bio Energetics</button>
+  </div>
+  <label>Upload notes</label>
+  <input id="file" type="file" accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.webp">
+  <p class="hint">PDF, TXT and MD work directly. Image OCR requires a Tesseract binary, which is not included in Vercel's serverless runtime.</p>
+  <button class="primary" onclick="generate()">✨ Generate Study Pack</button>
+  <div id="status" class="status"></div>
+</aside>
+
+<main class="main">
+  <span class="badge">🎓 AI STUDY ASSISTANT</span>
+  <h1>NotesGenius AI</h1>
+  <div class="lead">Turn messy lecture notes into a structured summary, key points, flashcards and a self-graded quiz.</div>
+
+  <div class="panel">
+    <label>Paste your lecture notes</label>
+    <textarea id="notes" placeholder="Paste notes here, or use the upload/sample controls on the left..."></textarea>
+  </div>
+
+  <div id="results" style="display:none">
+    <div class="metrics">
+      <div class="metric"><b id="mPoints">0</b><span>KEY POINTS</span></div>
+      <div class="metric"><b id="mCards">0</b><span>FLASHCARDS</span></div>
+      <div class="metric"><b id="mQuiz">0</b><span>QUIZ QUESTIONS</span></div>
+      <div class="metric"><b>AI</b><span>STUDY ENGINE</span></div>
+    </div>
+    <h2 id="title"></h2>
+    <div class="tabs">
+      <button class="active" onclick="showTab('summary',this)">📘 Summary</button>
+      <button onclick="showTab('points',this)">🎯 Key Points</button>
+      <button onclick="showTab('cards',this)">🧠 Flashcards</button>
+      <button onclick="showTab('quiz',this)">📝 Quiz</button>
+      <button onclick="showTab('export',this)">💾 Export</button>
+    </div>
+    <section id="summary" class="tab active card"></section>
+    <section id="points" class="tab card"></section>
+    <section id="cards" class="tab card"></section>
+    <section id="quiz" class="tab card"></section>
+    <section id="export" class="tab card"></section>
+  </div>
+</main>
+</div>
+
+<script>
+const OS=`Operating Systems: Concurrency, Deadlocks, and Semaphores.
+A race condition arises when multiple processes read and write shared data concurrently and the outcome depends on the particular order of execution. Critical Section problem requires Mutual Exclusion, Progress, and Bounded Waiting.
+Semaphores provide wait() (P) and signal() (V) operations. Mutex locks are binary semaphores.
+Deadlocks occur when four Coffman conditions hold: Mutual Exclusion, Hold and Wait, No Preemption, and Circular Wait. Banker's Algorithm avoids deadlock by safe state checking.`;
+const BIO=`Cellular Energetics: Photosynthesis and Cellular Respiration.
+Photosynthesis equation: 6CO2 + 6H2O + light -> C6H12O6 + 6O2. Occurs in chloroplasts.
+Light-dependent reactions take place in the thylakoid membranes, generating ATP and NADPH.
+The Calvin cycle fixes CO2 into sugars in the stroma.
+Cellular respiration breaks down glucose in four stages: Glycolysis (cytosol, 2 net ATP), Pyruvate Oxidation, Krebs Cycle (mitochondrial matrix), and Electron Transport Chain (inner membrane). Oxidative phosphorylation generates 28-32 ATP via ATP synthase and oxygen as terminal electron acceptor.`;
+function sample(which){document.getElementById('notes').value=which==='os'?OS:BIO;document.getElementById('provider').value='Demo Mode (Offline / No Key)';}
+function showTab(id,btn){document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');btn.classList.add('active');}
+function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
+function md(s){let x=esc(s);x=x.replace(/^### (.*)$/gm,'<h3>$1</h3>').replace(/^## (.*)$/gm,'<h3>$1</h3>').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\n- /g,'\n• ');return x.replace(/\n\n/g,'<br><br>').replace(/\n/g,'<br>');}
+async function generate(){
+  const status=document.getElementById('status');status.innerHTML='<span class="hint">⏳ Generating your study pack...</span>';
+  const fd=new FormData();fd.append('notes',document.getElementById('notes').value);fd.append('provider',document.getElementById('provider').value);fd.append('api_key',document.getElementById('key').value);fd.append('model',document.getElementById('model').value);
+  const file=document.getElementById('file').files[0];if(file)fd.append('file',file);
+  try{
+    const r=await fetch('/api/generate',{method:'POST',body:fd});const data=await r.json();
+    if(!r.ok)throw new Error(data.detail||'Generation failed');
+    render(data.package);status.innerHTML='<div class="success">✅ Study pack generated successfully.</div>';
+  }catch(e){status.innerHTML='<div class="error">❌ '+esc(e.message)+'</div>';}
+}
+let pack=null,cardIndex=0,flipped=false;
+function render(p){
+  pack=p;document.getElementById('results').style.display='block';document.getElementById('title').textContent=p.title||'Study Pack';
+  document.getElementById('mPoints').textContent=(p.key_points||[]).length;document.getElementById('mCards').textContent=(p.flashcards||[]).length;document.getElementById('mQuiz').textContent=(p.quiz||[]).length;
+  document.getElementById('summary').innerHTML='<div class="summary">'+md(p.summary||'')+'</div>';
+  document.getElementById('points').innerHTML='<h3>High-Yield Takeaways</h3><ul>'+(p.key_points||[]).map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>';
+  renderCard();renderQuiz();
+  document.getElementById('export').innerHTML='<div class="actions"><button onclick="downloadMD()">📥 Download Markdown</button><button onclick="downloadJSON()">📥 Download JSON</button></div>';
+  document.getElementById('results').scrollIntoView({behavior:'smooth',block:'start'});
+}
+function renderCard(){
+ const c=(pack.flashcards||[])[cardIndex];if(!c){document.getElementById('cards').innerHTML='<p>No flashcards generated.</p>';return}
+ document.getElementById('cards').innerHTML='<div class="flash"><div class="tag">'+(flipped?'ANSWER':'QUESTION')+'</div><div class="text">'+esc(flipped?c.back:c.front)+'</div></div><div class="actions"><button onclick="flip()">↔ Flip</button><button onclick="prevCard()">← Previous</button><button onclick="nextCard()">Next →</button><span class="hint">Card '+(cardIndex+1)+' / '+pack.flashcards.length+'</span></div>';
+}
+function flip(){flipped=!flipped;renderCard()}function nextCard(){cardIndex=(cardIndex+1)%pack.flashcards.length;flipped=false;renderCard()}function prevCard(){cardIndex=(cardIndex-1+pack.flashcards.length)%pack.flashcards.length;flipped=false;renderCard()}
+function renderQuiz(){
+ const q=pack.quiz||[];document.getElementById('quiz').innerHTML='<h3>Practice Evaluation</h3>'+q.map((x,i)=>'<div class="quizq"><strong>Q'+(i+1)+'. '+esc(x.question)+'</strong>'+x.options.map((o,j)=>'<label><input type="radio" name="q'+i+'" value="'+j+'">'+esc(o)+'</label>').join('')+'</div>').join('')+(q.length?'<button class="primary" onclick="gradeQuiz()">🏆 Submit Quiz</button><div id="score"></div>':'<p>No quiz questions generated.</p>');
+}
+function gradeQuiz(){let score=0;(pack.quiz||[]).forEach((q,i)=>{const a=document.querySelector('input[name="q'+i+'"]:checked');if(a&&Number(a.value)===q.correct_index)score++});const total=pack.quiz.length,pct=total?Math.round(score/total*100):0;document.getElementById('score').innerHTML='<div class="score">🏆 '+score+' / '+total+' ('+pct+'%)</div>';}
+function download(name,data,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type}));a.download=name;a.click();URL.revokeObjectURL(a.href)}
+function downloadJSON(){download('study_pack.json',JSON.stringify(pack,null,2),'application/json')}
+function downloadMD(){let s='# '+pack.title+'\n\n## Conceptual Summary\n\n'+pack.summary+'\n\n## High-Yield Takeaways\n\n'+pack.key_points.map(x=>'- '+x).join('\n')+'\n\n## Active Recall Flashcards\n\n'+pack.flashcards.map(x=>'- **Q:** '+x.front+'\n  - **A:** '+x.back).join('\n')+'\n\n## Practice Evaluation Quiz\n\n'+pack.quiz.map((q,i)=>'### Q'+(i+1)+': '+q.question+'\n'+q.options.map(o=>'- [ ] '+o).join('\n')+'\n**Answer:** '+q.options[q.correct_index]+'\n**Explanation:** '+q.explanation+'\n').join('\n');download('study_pack.md',s,'text/markdown')}
+</script>
+</body>
+</html>
