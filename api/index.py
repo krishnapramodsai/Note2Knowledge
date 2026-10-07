@@ -1,27 +1,53 @@
-"""
-Vercel entry point for NotesGenius AI.
-
-The original Streamlit app is kept as app_streamlit_backup.py.
-This FastAPI layer exposes the same core functionality through /api/generate,
-which is suitable for Vercel serverless deployment.
-"""
-import os
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from ai_engine import generate_study_package
 from extractor import extract_text
 
-app = FastAPI(title="NotesGenius AI API", version="1.0.0")
+
+app = FastAPI(
+    title="Note2Knowledge API",
+    version="1.0.0"
+)
 
 
+# -----------------------------
+# Frontend
+# -----------------------------
+@app.get("/")
+def home():
+    """
+    Serve the Note2Knowledge frontend.
+    """
+    index_file = Path(__file__).resolve().parent.parent / "index.html"
+
+    if not index_file.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Frontend index.html not found"
+        )
+
+    return FileResponse(index_file)
+
+
+# -----------------------------
+# Health check
+# -----------------------------
 @app.get("/api/health")
 def health():
-    return {"ok": True, "service": "NotesGenius AI"}
+    return {
+        "ok": True,
+        "service": "Note2Knowledge",
+        "status": "running"
+    }
 
 
+# -----------------------------
+# AI Study Pack Generator
+# -----------------------------
 @app.post("/api/generate")
 async def generate(
     notes: str = Form(""),
@@ -33,35 +59,70 @@ async def generate(
     try:
         source_text = (notes or "").strip()
 
+        # -----------------------------
+        # Handle uploaded file
+        # -----------------------------
         if file is not None and file.filename:
-            data = await file.read()
-            if len(data) > 8 * 1024 * 1024:
-                raise HTTPException(status_code=413, detail="File is too large. Maximum size is 8 MB.")
-            try:
-                extracted = extract_text(file.filename, data)
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
-            source_text = (source_text + "\n\n" + extracted).strip()
+            file_bytes = await file.read()
 
+            # Vercel serverless safety limit
+            if len(file_bytes) > 8 * 1024 * 1024:
+                raise HTTPException(
+                    status_code=413,
+                    detail="File is too large. Maximum size is 8 MB."
+                )
+
+            try:
+                extracted_text = extract_text(
+                    file.filename,
+                    file_bytes
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Could not extract text from file: {exc}"
+                )
+
+            if extracted_text:
+                if source_text:
+                    source_text += "\n\n" + extracted_text
+                else:
+                    source_text = extracted_text
+
+        # -----------------------------
+        # Validate input
+        # -----------------------------
         if not source_text:
             raise HTTPException(
                 status_code=400,
-                detail="Paste notes or upload a PDF/TXT/MD/image file first.",
+                detail="Paste notes or upload a PDF/TXT/MD file first."
             )
 
-        # Keep request sizes reasonable for a serverless function.
+        # Keep serverless request manageable
         source_text = source_text[:60000]
 
+        # -----------------------------
+        # Generate AI study package
+        # -----------------------------
         package = generate_study_package(
             source_text,
             provider=provider,
             api_key=api_key,
             model=model,
         )
-        return JSONResponse({"ok": True, "package": package})
+
+        return JSONResponse(
+            content={
+                "ok": True,
+                "package": package
+            }
+        )
 
     except HTTPException:
         raise
+
     except Exception as exc:
-        # Do not expose API keys or internal stack traces.
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Study pack generation failed: {exc}"
+        ) from exc
