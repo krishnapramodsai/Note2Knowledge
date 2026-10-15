@@ -1,6 +1,5 @@
-# NotesGenius AI — Vercel Edition
+# NotesGenius AI 
 
-This version converts the original Streamlit application into a Vercel-compatible
 web app:
 
 - `index.html` — browser UI
