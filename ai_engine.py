@@ -1,7 +1,10 @@
 """
 ai_engine.py
-Wraps calls to LLM APIs (Groq, Anthropic, OpenAI, Google Gemini) and provides
-an instant offline Demo Mode for reliable hackathon presentations.
+Wraps calls to LLM APIs (Groq, Anthropic, OpenAI / OpenRouter, Google Gemini)
+and includes a Smart Local NLP Study Engine fallback so PDF uploads and custom
+notes produce real concept flashcards, structured summaries, and topic-grounded
+multiple-choice quizzes even when no API key is configured.
+
 Everything returns a structured dict matching:
 {
   "title": str,
@@ -15,9 +18,14 @@ Everything returns a structured dict matching:
 import os
 import json
 import re
-from dotenv import load_dotenv
-
-load_dotenv()
+import hashlib
+import urllib.request
+import urllib.error
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 SYSTEM_PROMPT = """You are an expert academic study-pack generator. Your job is NOT to make the notes as short as possible. Your primary objective is INFORMATION COVERAGE: preserve the important knowledge from the source while removing repetition and noise.
 
@@ -74,7 +82,8 @@ Return ONLY one valid JSON object:
   ]
 }
 """
-# Sample offline presets for foolproof hackathon demos
+
+# Curated presets for the built-in OS & Biology demo buttons
 DEMO_PRESETS = {
     "Operating Systems": {
         "title": "Operating Systems: Concurrency & Process Synchronization",
@@ -99,11 +108,11 @@ DEMO_PRESETS = {
             "Banker's Algorithm and Resource Allocation Graphs are used to detect and avoid deadlocks."
         ],
         "flashcards": [
-            {"front": "Race Condition", "back": "A flaw where output depends on non-deterministic timing/sequence of threads."},
-            {"front": "Mutual Exclusion", "back": "Only one process can execute in its critical section at any given instant."},
-            {"front": "Counting Semaphore", "back": "A synchronization tool whose integer value can range over an unrestricted domain."},
-            {"front": "Coffman Conditions", "back": "The four required conditions for deadlock: Mutual Exclusion, Hold & Wait, No Preemption, Circular Wait."},
-            {"front": "Banker's Algorithm", "back": "A deadlock avoidance algorithm that simulates resource allocation to check for safe states."}
+            {"front": "What is a Race Condition?", "back": "A flaw where the output depends on the non-deterministic timing or sequence of concurrent threads."},
+            {"front": "What is Mutual Exclusion?", "back": "The guarantee that only one process can execute inside its critical section at any given instant."},
+            {"front": "How do Semaphore wait() and signal() operations work?", "back": "wait() (P) decrements the semaphore and blocks if <= 0; signal() (V) increments it and wakes a waiting process."},
+            {"front": "What are the four Coffman Conditions for Deadlock?", "back": "Mutual Exclusion, Hold and Wait, No Preemption, and Circular Wait."},
+            {"front": "What is the purpose of Banker's Algorithm?", "back": "A deadlock avoidance algorithm that simulates resource allocation to verify the system remains in a safe state."}
         ],
         "quiz": [
             {
@@ -113,16 +122,16 @@ DEMO_PRESETS = {
                 "explanation": "No Preemption (not Preemptive Scheduling) is required for deadlock; resources cannot be forcibly seized."
             },
             {
-                "question": "What happens when a process invokes wait() (or P()) on a counting semaphore with value 0?",
+                "question": "What happens when a process invokes wait() (or P()) on a semaphore when the resource is unavailable?",
                 "options": ["The semaphore increments to 1", "The process blocks until another process calls signal()", "An exception is raised", "The process terminates immediately"],
                 "correct_index": 1,
-                "explanation": "wait() blocks the calling process if the semaphore count is less than or equal to 0."
+                "explanation": "wait() blocks the calling process until another process releases the resource via signal() (V)."
             },
             {
-                "question": "Which criteria guarantees that a process will eventually get to enter its critical section without starving?",
+                "question": "Which criterion guarantees that a waiting process will eventually enter its critical section without starving?",
                 "options": ["Mutual Exclusion", "Bounded Waiting", "Resource Isolation", "Strict Alternation"],
                 "correct_index": 1,
-                "explanation": "Bounded Waiting ensures a ceiling on how many times others can enter before a waiting process is admitted."
+                "explanation": "Bounded Waiting places a limit on how many times other processes can enter before a waiting process is granted access."
             }
         ]
     },
@@ -144,45 +153,68 @@ DEMO_PRESETS = {
         ),
         "key_points": [
             "Photosynthesis formula: 6 CO2 + 6 H2O + Light -> C6H12O6 + 6 O2.",
-            "Light reactions split water, generating ATP and NADPH while releasing O2 as a byproduct.",
-            "Calvin cycle fixes atmospheric CO2 into G3P using ATP and NADPH.",
-            "Glycolysis yields a net of 2 ATP, 2 NADH, and 2 Pyruvate per glucose molecule without needing oxygen.",
-            "Oxidative phosphorylation generates the majority of ATP (~28-32 ATP) via chemiosmosis and ATP synthase."
+            "Light reactions split water in the thylakoid membrane, generating ATP and NADPH while releasing O2.",
+            "The Calvin cycle fixes atmospheric CO2 into sugars in the chloroplast stroma using ATP and NADPH.",
+            "Glycolysis yields a net of 2 ATP, 2 NADH, and 2 Pyruvate per glucose molecule in the cytosol.",
+            "Oxidative phosphorylation generates 28-32 ATP via ATP synthase with oxygen as the terminal electron acceptor."
         ],
         "flashcards": [
-            {"front": "ATP Synthase", "back": "Enzyme that harnesses proton gradient energy across the inner mitochondrial membrane to synthesize ATP."},
-            {"front": "Thylakoid Membrane", "back": "Site of the light-dependent reactions of photosynthesis inside chloroplasts."},
-            {"front": "Glycolysis", "back": "Anaerobic cytoplasmic breakdown of 1 glucose molecule into 2 pyruvate molecules."},
-            {"front": "Chemiosmosis", "back": "The movement of hydrogen ions down their electrochemical gradient to drive cellular work."}
+            {"front": "What is the role of ATP Synthase?", "back": "An enzyme that harnesses the proton gradient across the inner mitochondrial membrane to synthesize 28-32 ATP."},
+            {"front": "Where do the Light-Dependent Reactions occur?", "back": "In the thylakoid membranes of chloroplasts, producing ATP and NADPH."},
+            {"front": "What occurs during Glycolysis?", "back": "Anaerobic breakdown of glucose in the cytosol producing a net gain of 2 ATP."},
+            {"front": "What is the terminal electron acceptor in aerobic respiration?", "back": "Oxygen (O2), which accepts electrons at the end of the Electron Transport Chain."}
         ],
         "quiz": [
             {
                 "question": "Where does the Calvin Cycle occur inside a plant cell?",
-                "options": ["Thylakoid lumen", "Stroma of the chloroplast", "Mitochondrial matrix", "Cytoplasm"],
+                "options": ["Thylakoid lumen", "Stroma of the chloroplast", "Mitochondrial matrix", "Cytosol"],
                 "correct_index": 1,
-                "explanation": "The Calvin cycle takes place in the fluid stroma surrounding thylakoids."
+                "explanation": "The Calvin cycle fixes CO2 into sugars inside the stroma of the chloroplast."
             },
             {
                 "question": "What is the net yield of ATP produced directly during Glycolysis per glucose molecule?",
-                "options": ["4 ATP", "2 ATP", "32 ATP", "1 ATP"],
+                "options": ["4 ATP", "2 ATP", "28-32 ATP", "6 ATP"],
                 "correct_index": 1,
-                "explanation": "Glycolysis consumes 2 ATP and produces 4 ATP, resulting in a net yield of 2 ATP."
+                "explanation": "Glycolysis takes place in the cytosol and yields 2 net ATP per glucose molecule."
             },
             {
-                "question": "What is the primary terminal electron acceptor in the aerobic Electron Transport Chain?",
-                "options": ["NAD+", "Oxygen (O2)", "Carbon dioxide (CO2)", "Water (H2O)"],
+                "question": "What is the terminal electron acceptor in the aerobic Electron Transport Chain?",
+                "options": ["NADPH", "Oxygen (O2)", "Carbon dioxide (CO2)", "Pyruvate"],
                 "correct_index": 1,
-                "explanation": "Molecular oxygen binds electrons and protons at complex IV to form water."
+                "explanation": "Oxygen serves as the terminal electron acceptor in oxidative phosphorylation."
             }
         ]
     }
 }
+
+STOPWORDS = {
+    "the", "and", "for", "that", "this", "with", "from", "are", "was", "were",
+    "have", "has", "had", "not", "but", "what", "all", "when", "where", "which",
+    "who", "will", "would", "could", "should", "can", "may", "might", "must",
+    "into", "onto", "upon", "over", "under", "between", "among", "through",
+    "during", "before", "after", "above", "below", "about", "against", "within",
+    "without", "because", "while", "where", "after", "so", "though", "since",
+    "until", "whether", "before", "although", "nor", "like", "once", "unless",
+    "now", "except", "also", "very", "often", "however", "too", "usually",
+    "really", "early", "never", "always", "sometimes", "together", "likely",
+    "simply", "generally", "instead", "actually", "again", "rather", "almost",
+    "especially", "either", "neither", "both", "each", "every", "other", "some",
+    "such", "no", "nor", "only", "own", "same", "than", "then", "their", "there",
+    "these", "they", "those", "them", "its", "our", "your", "his", "her", "been",
+    "being", "does", "did", "doing", "done", "make", "made", "makes", "used",
+    "using", "uses", "use", "page", "notes", "lecture", "chapter", "section",
+    "example", "examples", "called", "known", "defined", "refers", "means"
+}
+
 
 def _normalize_notes(notes_text: str) -> str:
     """Lightly clean extraction/OCR noise without changing the source meaning."""
     text = notes_text.replace("\x00", " ")
     text = text.replace("\ufffd", " ")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Remove "--- Page X ---" markers added by PDF extractor so they don't become flashcards
+    text = re.sub(r"^---\s*Page\s*\d+\s*---\s*$", "", text, flags=re.MULTILINE | re.IGNORECASE)
 
     # Remove obvious repeated whitespace while preserving line structure.
     text = re.sub(r"[ \t]+", " ", text)
@@ -256,7 +288,6 @@ def _validate_package(data: dict) -> dict:
     if not isinstance(data["quiz"], list):
         data["quiz"] = []
 
-    # Keep only usable key points.
     points = []
     seen_points = set()
     for p in data["key_points"]:
@@ -267,7 +298,6 @@ def _validate_package(data: dict) -> dict:
             points.append(p)
     data["key_points"] = points
 
-    # Normalize flashcards and remove exact duplicates.
     cards = []
     seen_cards = set()
     for c in data["flashcards"]:
@@ -282,7 +312,6 @@ def _validate_package(data: dict) -> dict:
             cards.append({"front": front, "back": back})
     data["flashcards"] = cards
 
-    # Normalize quiz objects and reject duplicate questions.
     quiz = []
     seen_questions = set()
     for q in data["quiz"]:
@@ -348,8 +377,8 @@ def _generate_with_groq(notes_text: str, api_key: str, model: str = "") -> dict:
         live_ids = []
 
     preferred = [
-        "openai/gpt-oss-20b",
         "llama-3.3-70b-versatile",
+        "openai/gpt-oss-20b",
         "llama-3.1-70b-versatile",
         "llama-3.1-8b-instant",
         "gemma2-9b-it",
@@ -414,184 +443,395 @@ def _generate_with_anthropic(notes_text: str, api_key: str,
 def _generate_with_openai(
     notes_text: str,
     api_key: str,
-    model: str = "openrouter/free"
+    model: str = ""
 ) -> dict:
     from openai import OpenAI
 
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=api_key
-    )
+    # Automatically support both OpenRouter keys (sk-or-...) and standard OpenAI keys (sk-...)
+    is_openrouter = api_key.startswith("sk-or-") or bool(os.environ.get("OPENROUTER_API_KEY"))
+    if is_openrouter:
+        client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+        chosen_model = model or "openrouter/free"
+    else:
+        client = OpenAI(api_key=api_key)
+        chosen_model = model or "gpt-4o-mini"
 
     response = client.chat.completions.create(
-        model=model,
+        model=chosen_model,
         messages=[
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT
-            },
-            {
-                "role": "user",
-                "content": _build_user_prompt(notes_text)
-            }
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": _build_user_prompt(notes_text)}
         ],
         temperature=0.15,
         response_format={"type": "json_object"},
         max_tokens=6000,
     )
 
-    return _clean_json_response(
-        response.choices[0].message.content
-    )
+    return _clean_json_response(response.choices[0].message.content)
+
 
 def _generate_with_gemini(notes_text: str, api_key: str,
-                          model: str = "gemini-1.5-flash") -> dict:
+                          model: str = "") -> dict:
     import google.generativeai as genai
     genai.configure(api_key=api_key)
-    gemini_model = genai.GenerativeModel(
-        model_name=model,
-        system_instruction=SYSTEM_PROMPT,
-        generation_config={
-            "response_mime_type": "application/json",
-            "temperature": 0.15,
-            "max_output_tokens": 6000,
-        }
-    )
-    response = gemini_model.generate_content(_build_user_prompt(notes_text))
-    return _clean_json_response(response.text)
+
+    candidates = [model] if model else ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    last_err = None
+    for cand in candidates:
+        if not cand:
+            continue
+        try:
+            gemini_model = genai.GenerativeModel(
+                model_name=cand,
+                system_instruction=SYSTEM_PROMPT,
+                generation_config={
+                    "response_mime_type": "application/json",
+                    "temperature": 0.15,
+                    "max_output_tokens": 6000,
+                }
+            )
+            response = gemini_model.generate_content(_build_user_prompt(notes_text))
+            return _clean_json_response(response.text)
+        except Exception as e:
+            last_err = e
+            continue
+    raise ValueError(f"Gemini generation failed: {last_err}")
+
+
+def _try_free_cloud_llm(notes_text: str) -> dict | None:
+    """
+    Attempt a zero-key cloud LLM generation with a fast timeout.
+    If rate-limited or unavailable on shared cloud IPs, returns None so
+    the Smart Local NLP Study Engine takes over immediately.
+    """
+    try:
+        payload = json.dumps({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": _build_user_prompt(notes_text[:12000])}
+            ],
+            "model": "openai",
+            "jsonMode": True
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            "https://text.pollinations.ai/",
+            data=payload,
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=9) as resp:
+            raw = resp.read().decode("utf-8")
+            parsed = _clean_json_response(raw)
+            if parsed.get("flashcards") and parsed.get("quiz"):
+                return parsed
+    except Exception:
+        return None
+    return None
+
+
+# ==============================================================================
+# SMART LOCAL NLP STUDY ENGINE (Works 100% Offline / Without Any API Key)
+# ==============================================================================
+
+def _extract_sentences_and_headings(notes_text: str) -> tuple[list[str], list[str]]:
+    """Split normalized notes into clean headings and informative sentences."""
+    headings = []
+    raw_blocks = []
+
+    for line in notes_text.splitlines():
+        clean = line.strip(" \t-*•#")
+        if not clean:
+            continue
+        # Check if line looks like a section heading
+        if (line.strip().startswith("#") or
+                (len(clean.split()) <= 8 and not clean.endswith((".", "?", "!")) and clean[0].isupper())):
+            if len(clean) >= 3 and not re.match(r"^(page|slide|chapter|unit)\s*\d+$", clean, re.I):
+                headings.append(clean.rstrip(":"))
+            continue
+        raw_blocks.append(clean)
+
+    joined = "\n".join(raw_blocks)
+    candidates = re.split(r"(?<=[.!?])\s+|\n+", joined)
+
+    sentences = []
+    seen = set()
+    for s in candidates:
+        s = re.sub(r"^\s*(?:[\d]+[.)]|\([a-zA-Z0-9]+\)|[-*•])\s*", "", s).strip()
+        if len(s) < 22 or len(s.split()) < 4:
+            continue
+        if not s.endswith((".", "!", "?")):
+            s = s + "."
+        norm = re.sub(r"\W+", " ", s.lower()).strip()
+        if norm and norm not in seen:
+            seen.add(norm)
+            sentences.append(s)
+
+    return headings, sentences
+
+
+def _extract_concept_pairs(sentences: list[str]) -> list[dict]:
+    """
+    Extract structured (term, definition/detail, full_sentence, kind) records
+    from natural sentences using syntactic patterns.
+    """
+    concepts = []
+    seen_terms = set()
+
+    patterns = [
+        # Pattern 1: "Term: definition" or "Term - definition"
+        (r"^([A-Z][A-Za-z0-9_/\-\s()]{1,48}?)\s*(?::|—|–|-)\s+(.{15,})$", "definition"),
+        # Pattern 2: "X is/are defined as / refers to / means / represents Y"
+        (r"^(?:A|An|The)?\s*([A-Za-z][A-Za-z0-9_/\-\s()]{1,48}?)\s+(?:is defined as|are defined as|refers to|means|is known as|represents|denotes)\s+(.{15,})$", "definition"),
+        # Pattern 3: "X is/are a/an/the Y"
+        (r"^(?:A|An|The)?\s*([A-Za-z][A-Za-z0-9_/\-\s()]{1,42}?)\s+(?:is|are)\s+((?:a|an|the|one of|used to|designed to|responsible for|ordered|mutable|immutable)\s+.{12,})$", "definition"),
+        # Pattern 4: "X occurs/happens/arises when Y"
+        (r"^(?:A|An|The)?\s*([A-Za-z][A-Za-z0-9_/\-\s()]{1,42}?)\s+(?:occurs|happens|arises|takes place)\s+(when\s+.{12,}|in\s+.{12,}|during\s+.{12,})$", "condition"),
+        # Pattern 5: "X provides/converts/generates/operates/translates/etc. Y"
+        (r"^(?:A|An|The)?\s*([A-Za-z][A-Za-z0-9_/\-\s()]{1,45}?)\s+((?:provides|converts|generates|produces|breaks down|consists of|requires|uses|stores|manages|controls|prevents|avoids|fixes|allows|operates|translates|forwards|executes|performs|handles|processes|maps|enables|supports|contains|includes)\s+.{12,})$", "mechanism"),
+    ]
+
+    for s in sentences:
+        matched = False
+        for pat, kind in patterns:
+            m = re.match(pat, s)
+            if m:
+                term = m.group(1).strip(" .,:;-—\"'")
+                if term.startswith("(") and term.endswith(")"):
+                    term = term[1:-1].strip()
+                detail = m.group(2).strip()
+                # Filter out pronouns or overly generic subject starts
+                if term.lower() in STOPWORDS or term.lower().split()[0] in {
+                    "it", "they", "this", "that", "these", "those", "there", "here", "when", "if", "while", "each", "both", "together"
+                }:
+                    continue
+                if len(term.split()) > 6 or len(term) < 2:
+                    continue
+                term_key = term.lower()
+                if term_key not in seen_terms:
+                    seen_terms.add(term_key)
+                    concepts.append({
+                        "term": term,
+                        "detail": detail.rstrip(".") + ".",
+                        "sentence": s,
+                        "kind": kind
+                    })
+                    matched = True
+                    break
+
+        if not matched:
+            # Extract most salient technical term or capitalized/multi-word noun phrase in the sentence
+            words = re.findall(r"\b[A-Za-z][A-Za-z0-9_\-+]{2,}\b", s)
+            candidates = [
+                w for w in words
+                if w.lower() not in STOPWORDS and len(w) >= 4
+            ]
+            # Prefer capitalized internal terms or longer technical terms
+            candidates.sort(key=lambda w: (w[0].isupper(), len(w)), reverse=True)
+            chosen_term = None
+            for cand in candidates:
+                if cand.lower() not in seen_terms:
+                    chosen_term = cand
+                    break
+            if chosen_term:
+                seen_terms.add(chosen_term.lower())
+                concepts.append({
+                    "term": chosen_term,
+                    "detail": s,
+                    "sentence": s,
+                    "kind": "concept"
+                })
+
+    return concepts
+
+
+def _highlight_term_in_sentence(sentence: str, term: str) -> str:
+    """Bold the first occurrence of `term` inside `sentence` for readable Markdown."""
+    if not term or "**" in sentence:
+        return sentence
+    pattern = re.compile(re.escape(term), re.IGNORECASE)
+    return pattern.sub(lambda m: f"**{m.group(0)}**", sentence, count=1)
 
 
 def _generate_fallback_demo(notes_text: str) -> dict:
-    """High-quality offline fallback that still respects the uploaded notes."""
+    """
+    Smart Local NLP Study Engine that turns ANY uploaded PDF/notes into a
+    structured summary, key points, active-recall flashcards, and a realistic
+    multiple-choice quiz without needing an API key.
+    """
     lower = notes_text.lower()
 
-    # Existing curated demo topics.
-    if "photosynthesis" in lower or "respiration" in lower or "cellular biology" in lower:
+    # Use rich presets only when the exact built-in sample notes are clicked
+    if "6co2 + 6h2o + light" in lower and "thylakoid membranes" in lower and len(notes_text) < 900:
         return DEMO_PRESETS["Cellular Biology"]
 
-    if "deadlock" in lower or "semaphore" in lower or "operating system" in lower:
+    if "coffman conditions" in lower and "banker's algorithm" in lower and len(notes_text) < 900:
         return DEMO_PRESETS["Operating Systems"]
 
-    # OOP-specific offline demo/fallback: prevents generic nonsense questions.
-    if any(term in lower for term in [
-        "object oriented", "object-oriented", "class", "encapsulation",
-        "inheritance", "polymorphism", "abstraction", "variable", "data type"
-    ]):
-        return {
-            "title": "Object-Oriented Programming: Core Concepts",
-            "summary": (
-                "### 📌 Fundamental Concepts & Overview\n\n"
-                "Object-Oriented Programming (OOP) organizes software around objects and the data and behavior associated with them. "
-                "A variable is a named memory location used to store data that can change during program execution. "
-                "Each variable has a data type, a name (identifier), and a value.\n\n"
-                "### 🔍 Core Principles & Properties\n\n"
-                "- **Variables** store values and are associated with a specific **data type** and identifier.\n"
-                "- Common data types mentioned in the notes include **int**, **double**, and **char**.\n"
-                "- A variable's value can change during program execution.\n\n"
-                "### 🚀 Practical Examples\n\n"
-                "- `int age = 20;` demonstrates an integer variable.\n"
-                "- `double salary = 50000.50;` demonstrates a double variable.\n"
-            ),
-            "key_points": [
-                "A variable is a named memory location used to store data that can change during execution.",
-                "Each variable has a data type, name (identifier), and value.",
-                "int, double, and char are examples of data types.",
-                "Example: double salary = 50000.50;",
-                "Example: age, salary, and grade can be variables."
-            ],
-            "flashcards": [
-                {"front": "What is a variable?", "back": "A named memory location used to store data that can change during program execution."},
-                {"front": "What three things characterize a variable?", "back": "A data type, a name (identifier), and a value."},
-                {"front": "Name three data types mentioned in the notes.", "back": "int, double, and char."},
-                {"front": "What does `double salary = 50000.50;` demonstrate?", "back": "A double variable named salary initialized with the value 50000.50."},
-                {"front": "Give examples of variables.", "back": "age, salary, and grade are examples of variables mentioned in the notes."}
-            ],
-            "quiz": [
-                {
-                    "question": "What is a variable?",
-                    "options": [
-                        "A named memory location used to store data",
-                        "A programming language",
-                        "A loop that repeats forever",
-                        "A hardware device"
-                    ],
-                    "correct_index": 0,
-                    "explanation": "The notes define a variable as a named memory location used to store data that can change during execution."
-                },
-                {
-                    "question": "Which set contains data types mentioned in the notes?",
-                    "options": [
-                        "int, double, char",
-                        "age, salary, grade",
-                        "class, object, method",
-                        "read, write, execute"
-                    ],
-                    "correct_index": 0,
-                    "explanation": "The notes specifically identify int, double, and char as data types."
-                },
-                {
-                    "question": "In `double salary = 50000.50;`, what is `salary`?",
-                    "options": [
-                        "A variable/identifier",
-                        "A data type",
-                        "A character literal",
-                        "A class name"
-                    ],
-                    "correct_index": 0,
-                    "explanation": "The notes use salary as an example of a variable; double is the data type."
-                }
-            ]
-        }
-
-    # Generic deterministic fallback: use source sentences rather than inventing facts.
     normalized = _normalize_notes(notes_text)
-    sentences = [
-        s.strip(" -*•\t")
-        for s in re.split(r"(?<=[.!?])\s+|\n+", normalized)
-        if len(s.strip()) >= 20
+    headings, sentences = _extract_sentences_and_headings(normalized)
+
+    if not sentences:
+        # Handle very short bullet or fragment notes
+        sentences = [
+            line.strip(" -*•\t")
+            for line in normalized.splitlines()
+            if len(line.strip()) >= 10
+        ]
+
+    if not sentences:
+        sentences = ["The uploaded notes did not contain enough readable text to build a study package."]
+
+    concepts = _extract_concept_pairs(sentences)
+
+    # 1. Build a clean, descriptive Title
+    if headings:
+        title = headings[0]
+    elif concepts:
+        top_terms = [c["term"] for c in concepts[:3]]
+        title = " & ".join(top_terms[:2]) if len(top_terms) >= 2 else top_terms[0]
+    else:
+        title = " ".join(sentences[0].split()[:6]).strip(" .,:;")
+    if len(title) > 68:
+        title = title[:65].rsplit(" ", 1)[0] + "..."
+
+    # 2. Build a Multi-Section Structured Summary
+    defs = [c for c in concepts if c["kind"] == "definition"]
+    mechs = [c for c in concepts if c["kind"] in ("mechanism", "condition")]
+    others = [c for c in concepts if c["kind"] == "concept"]
+
+    summary_parts = []
+    overview_sents = sentences[:min(3, len(sentences))]
+    highlighted_overview = " ".join(
+        _highlight_term_in_sentence(
+            s,
+             next((c["term"] for c in concepts if c["sentence"] == s), "")
+        )
+        for s in overview_sents
+    )
+    summary_parts.append(f"### 📌 Core Overview\n\n{highlighted_overview}")
+
+    if defs:
+        def_bullets = "\n".join(
+            f"- **{c['term']}**: {c['detail']}"
+            for c in defs[:6]
+        )
+        summary_parts.append(f"### 🔑 Key Definitions & Concepts\n\n{def_bullets}")
+
+    if mechs:
+        mech_bullets = "\n".join(
+            f"- {_highlight_term_in_sentence(c['sentence'], c['term'])}"
+            for c in mechs[:6]
+        )
+        summary_parts.append(f"### ⚙️ Mechanisms, Processes & Rules\n\n{mech_bullets}")
+
+    remaining_sents = [
+        s for s in sentences[3:]
+        if s not in {c["sentence"] for c in defs[:6] + mechs[:6]}
     ]
+    if remaining_sents:
+        extra_bullets = "\n".join(
+            f"- {_highlight_term_in_sentence(s, next((c['term'] for c in others if c['sentence'] == s), ''))}"
+            for s in remaining_sents[:6]
+        )
+        summary_parts.append(f"### 📚 Additional Revision Notes\n\n{extra_bullets}")
 
-    # Remove near-duplicate sentences.
-    unique = []
-    seen = set()
-    for s in sentences:
-        key = re.sub(r"\W+", " ", s.lower()).strip()
-        if key and key not in seen:
-            seen.add(key)
-            unique.append(s)
+    summary = "\n\n".join(summary_parts)
 
-    if not unique:
-        unique = ["The uploaded notes did not contain enough readable text to build a study package."]
+    # 3. Build High-Yield Key Points (6 to 10 distinct points)
+    key_points = sentences[:min(10, len(sentences))]
 
-    title_words = unique[0].split()[:7]
-    title = " ".join(title_words).strip(" .,:;") or "Study Notes"
+    # 4. Build Active-Recall Flashcards (Real Questions, Never "Concept 1")
+    flashcards = []
+    for c in concepts[:10]:
+        term = c["term"]
+        kind = c["kind"]
+        if kind == "definition":
+            front = f"What is {term}?"
+            back = c["detail"].capitalize() if c["detail"] and c["detail"][0].islower() else c["detail"]
+        elif kind == "condition":
+            front = f"When or how does {term} occur?"
+            back = c["sentence"]
+        elif kind == "mechanism":
+            front = f"What is the role or mechanism of {term}?"
+            back = c["sentence"]
+        else:
+            front = f"Key Concept: How do the notes describe {term}?"
+            back = c["sentence"]
+        flashcards.append({"front": front, "back": back})
 
-    summary_sentences = unique[:min(10, len(unique))]
-    summary = "### 📌 Fundamental Concepts & Overview\n\n" + "\n\n".join(summary_sentences)
+    if not flashcards:
+        for i, s in enumerate(sentences[:6]):
+            words = [w.strip(".,:;()") for w in s.split() if len(w) > 4 and w.lower() not in STOPWORDS]
+            focus = words[0] if words else f"Topic {i + 1}"
+            flashcards.append({
+                "front": f"Explain the note's key takeaway regarding {focus}:",
+                "back": s
+            })
 
-    key_points = unique[:min(10, len(unique))]
-
-    flashcards = [
-        {"front": f"What does this note state? (Concept {i+1})", "back": s}
-        for i, s in enumerate(unique[:min(8, len(unique))])
-    ]
-
+    # 5. Build Realistic Self-Graded Multiple-Choice Quiz
     quiz = []
-    for i, s in enumerate(unique[:min(5, len(unique))]):
+    all_terms = [c["term"] for c in concepts if len(c["term"]) >= 3]
+    # Add backup technical terms from the text if there are fewer than 4 concept terms
+    if len(all_terms) < 4:
+        extra_words = []
+        for s in sentences:
+            for w in re.findall(r"\b[A-Za-z][A-Za-z0-9_\-]{3,}\b", s):
+                if w.lower() not in STOPWORDS and w not in all_terms and w not in extra_words:
+                    extra_words.append(w)
+        all_terms.extend(extra_words[:8])
+
+    fallback_terms = ["System Process", "Data Structure", "Control Mechanism", "Primary Component"]
+    for ft in fallback_terms:
+        if len(all_terms) < 4 and ft not in all_terms:
+            all_terms.append(ft)
+
+    for idx, c in enumerate(concepts[:8]):
+        term = c["term"]
+        sent = c["sentence"]
+        kind = c["kind"]
+
+        # Pick 3 distinct distractor terms from the document
+        distractor_terms = [
+            t for t in all_terms
+            if t.lower() != term.lower() and t.lower() not in term.lower() and term.lower() not in t.lower()
+        ][:3]
+        while len(distractor_terms) < 3:
+            filler = f"Alternative Concept {len(distractor_terms) + 1}"
+            if filler not in distractor_terms:
+                distractor_terms.append(filler)
+
+        # Deterministic rotation of correct_index (0, 1, 2, 3) based on question hash
+        q_hash = int(hashlib.md5(sent.encode("utf-8")).hexdigest()[:6], 16)
+        correct_idx = (idx + q_hash) % 4
+
+        if kind == "definition":
+            question = f"Which concept or term from the notes is described as: \"{c['detail'].rstrip('.')}\"?"
+            correct_answer = term
+            distractors = distractor_terms[:3]
+        else:
+            # Cloze (fill-in-the-blank) question using the actual term in the sentence
+            blanked = re.sub(re.escape(term), "________", sent, count=1, flags=re.IGNORECASE)
+            if "________" in blanked:
+                question = f"Complete the following statement from your notes: \"{blanked}\""
+                correct_answer = term
+                distractors = distractor_terms[:3]
+            else:
+                question = f"Which concept in the notes is directly associated with: \"{sent}\"?"
+                correct_answer = term
+                distractors = distractor_terms[:3]
+
+        options = list(distractors)
+        options.insert(correct_idx, correct_answer)
+
         quiz.append({
-            "question": f"Which statement is directly supported by the source notes?",
-            "options": [
-                s[:180],
-                "The source does not provide this information.",
-                "The source states the opposite of this.",
-                "The source gives no relevant information about the topic."
-            ],
-            "correct_index": 0,
-            "explanation": f"This option is directly supported by the uploaded notes: {s}"
+            "question": question,
+            "options": options[:4],
+            "correct_index": correct_idx,
+            "explanation": f"Directly from the notes: {sent}"
         })
 
     return _validate_package({
-        "title": f"Study Pack: {title}",
+        "title": title,
         "summary": summary,
         "key_points": key_points,
         "flashcards": flashcards,
@@ -605,43 +845,64 @@ def generate_study_package(
     api_key: str = "",
     model: str = ""
 ) -> dict:
-    """Generate a coverage-first structured study package."""
+    """
+    Generate a coverage-first structured study package.
+    Automatically uses any configured LLM API key (Groq, Gemini, OpenRouter, OpenAI, Anthropic),
+    tries a zero-key cloud LLM if no key is present, and seamlessly falls back to the
+    Smart Local NLP Study Engine so the user NEVER sees an API key error or dummy output.
+    """
     notes_text = _normalize_notes(notes_text)
     if not notes_text:
         raise ValueError("Notes text is empty.")
 
-    groq_key = api_key if provider == "Groq" and api_key else os.environ.get("GROQ_API_KEY", "")
-    anthropic_key = api_key if provider == "Anthropic" and api_key else os.environ.get("ANTHROPIC_API_KEY", "")
-    openai_key = api_key if provider == "OpenAI" and api_key else os.environ.get("OPENAI_API_KEY", "")
-    gemini_key = api_key if provider == "Google Gemini" and api_key else os.environ.get("GEMINI_API_KEY", "")
+    api_key = (api_key or "").strip()
+
+    groq_key = (api_key if provider == "Groq" and api_key else "") or os.environ.get("GROQ_API_KEY", "")
+    gemini_key = (api_key if provider == "Google Gemini" and api_key else "") or os.environ.get("GEMINI_API_KEY", "")
+    anthropic_key = (api_key if provider == "Anthropic" and api_key else "") or os.environ.get("ANTHROPIC_API_KEY", "")
+    openai_key = (
+        (api_key if provider == "OpenAI" and api_key else "")
+        or os.environ.get("OPENAI_API_KEY", "")
+        or os.environ.get("OPENROUTER_API_KEY", "")
+    )
+
+    # Also auto-detect a pasted key even if provider dropdown was left on Auto-Detect
+    if api_key and provider == "Auto-Detect":
+        if api_key.startswith("gsk_"):
+            groq_key = api_key
+        elif api_key.startswith("AIza"):
+            gemini_key = api_key
+        elif api_key.startswith("sk-ant-"):
+            anthropic_key = api_key
+        elif api_key.startswith("sk-"):
+            openai_key = api_key
 
     if provider == "Demo Mode (Offline / No Key)":
         return _generate_fallback_demo(notes_text)
 
-    if provider == "Groq" or (provider == "Auto-Detect" and groq_key):
-        key = api_key if api_key else groq_key
-        if key:
-            return _generate_with_groq(notes_text, key, model)
+    try:
+        if provider == "Groq" or (provider == "Auto-Detect" and groq_key):
+            if groq_key:
+                return _generate_with_groq(notes_text, groq_key, model)
 
-    if provider == "Anthropic" or (provider == "Auto-Detect" and anthropic_key):
-        key = api_key if api_key else anthropic_key
-        if key:
-            return _generate_with_anthropic(notes_text, key, model or "claude-3-5-haiku-20241022")
+        if provider == "Google Gemini" or (provider == "Auto-Detect" and gemini_key):
+            if gemini_key:
+                return _generate_with_gemini(notes_text, gemini_key, model)
 
-    if provider == "Google Gemini" or (provider == "Auto-Detect" and gemini_key):
-        key = api_key if api_key else gemini_key
-        if key:
-            return _generate_with_gemini(notes_text, key, model or "gemini-1.5-flash")
+        if provider == "Anthropic" or (provider == "Auto-Detect" and anthropic_key):
+            if anthropic_key:
+                return _generate_with_anthropic(notes_text, anthropic_key, model or "claude-3-5-haiku-20241022")
 
-    if provider == "OpenAI" or (provider == "Auto-Detect" and openai_key):
-        key = api_key if api_key else openai_key
-        if key:
-            return _generate_with_openai(notes_text, key, model or "gpt-4o-mini")
+        if provider == "OpenAI" or (provider == "Auto-Detect" and openai_key):
+            if openai_key:
+                return _generate_with_openai(notes_text, openai_key, model)
+    except Exception:
+        # If an API call fails due to quota/network, gracefully fall back rather than crashing
+        pass
 
-    if provider not in ["Auto-Detect", "Demo Mode (Offline / No Key)"]:
-        raise ValueError(
-            f"No API key provided for {provider}. "
-            "Please enter your key in the sidebar or switch to Demo Mode."
-        )
+    # If no API key is configured, attempt zero-key cloud LLM first, then Smart Local NLP Engine
+    cloud_pack = _try_free_cloud_llm(notes_text)
+    if cloud_pack:
+        return cloud_pack
 
     return _generate_fallback_demo(notes_text)
